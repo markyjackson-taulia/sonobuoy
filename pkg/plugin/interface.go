@@ -19,6 +19,7 @@ package plugin
 import (
 	"io"
 	"path"
+	"text/template"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
@@ -31,7 +32,7 @@ type Interface interface {
 	// returns.  It does not block and wait until the plugin has finished.
 	Run(kubeClient kubernetes.Interface) error
 	// Cleanup cleans up all resources created by the plugin
-	Cleanup(kubeClient kubernetes.Interface) []error
+	Cleanup(kubeClient kubernetes.Interface)
 	// Monitor continually checks for problems in the resources created by a
 	// plugin (either because it won't schedule, or the image won't
 	// download, too many failed executions, etc) and sends the errors as
@@ -45,23 +46,22 @@ type Interface interface {
 	GetResultType() string
 	// GetName returns the name of this plugin
 	GetName() string
-	// GetPodSpec returns the pod spec for this plugins
-	GetPodSpec() *v1.PodSpec
-	// GetSessionID returns a distinct identifier for this plugin in this
-	// sonobuoy session (for instance, for labeling resources created by
-	// this plugin.)
-	GetSessionID() string
+}
+
+// A required piece of data to render the template found in Definition.
+type DefinitionTemplateData struct {
+	SessionID     string
+	MasterAddress string
+	Namespace     string
 }
 
 // Definition defines a plugin's features, method of launch, and other
 // metadata about it.
 type Definition struct {
-	Driver     string                 `json:"driver"`
-	Name       string                 `json:"name"`
-	ResultType string                 `json:"resultType"`
-	RawPodSpec map[string]interface{} `json:"spec"`
-
-	PodSpec v1.PodSpec // This is filled in by the plugin loader, since deserializing a pod spec is nontrivial
+	Driver     string
+	Name       string
+	ResultType string
+	Template   *template.Template
 }
 
 // ExpectedResult is an expected result that a plugin will submit.  This is so
@@ -77,6 +77,7 @@ type ExpectedResult struct {
 type Result struct {
 	NodeName   string
 	ResultType string
+	Extension  string
 	Body       io.Reader
 	Error      string
 }
@@ -115,7 +116,7 @@ type AggregationConfig struct {
 // WorkerConfig is the file given to the sonobuoy worker to configure it to phone home.
 type WorkerConfig struct {
 	// MasterURL is the URL we talk to for submitting results
-	MasterURL string `json:"masterurl,omitempty mapstructure:"masterurl""`
+	MasterURL string `json:"masterurl,omitempty" mapstructure:"masterurl"`
 	// NodeName is the node name we should call ourselves when sending results
 	NodeName string `json:"nodename,omitempty" mapstructure:"nodename"`
 	// ResultsDir is the directory that's expected to contain the host's root filesystem
@@ -143,14 +144,4 @@ func (r *Result) ExpectedResultID() string {
 	}
 
 	return r.ResultType + "/" + r.NodeName
-}
-
-// Extension returns the results extension for different plugins
-// TODO: We should load this for the plugin.
-func (r *Result) Extension() string {
-	if r.ResultType == "e2e" {
-		return ".tar.gz"
-	}
-
-	return ".json"
 }

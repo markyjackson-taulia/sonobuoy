@@ -18,13 +18,24 @@ package utils
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
 	"github.com/heptio/sonobuoy/pkg/plugin"
+	gouuid "github.com/satori/go.uuid"
 
 	v1 "k8s.io/api/core/v1"
 )
+
+// GetSessionID generates a new session id.
+// This is essentially an instance of a running plugin.
+func GetSessionID() string {
+	uuid := gouuid.NewV4()
+	ret := make([]byte, hex.EncodedLen(8))
+	hex.Encode(ret, uuid.Bytes()[0:8])
+	return string(ret)
+}
 
 // IsPodFailing returns whether a plugin's pod is failing and isn't likely to
 // succeed.
@@ -62,7 +73,7 @@ func IsPodFailing(pod *v1.Pod) (bool, string) {
 // for this plugin as a JSON file, so it's what users will see for why the
 // plugin failed.  If errdata["error"] is not set, it will be filled in with an
 // "Unknown error" string.
-func MakeErrorResult(p plugin.Interface, errdata map[string]interface{}, nodeName string) *plugin.Result {
+func MakeErrorResult(resultType string, errdata map[string]interface{}, nodeName string) *plugin.Result {
 	errJSON, _ := json.Marshal(errdata)
 
 	errstr := "Unknown error"
@@ -73,21 +84,8 @@ func MakeErrorResult(p plugin.Interface, errdata map[string]interface{}, nodeNam
 	return &plugin.Result{
 		Body:       bytes.NewReader(errJSON),
 		Error:      errstr,
-		ResultType: p.GetResultType(),
+		ResultType: resultType,
 		NodeName:   nodeName,
+		Extension:  ".json",
 	}
-}
-
-// ApplyDefaultLabels applies a default label set to the given
-// map[string]string.  All our resources should have a commmon label set,
-// particularly a unique sesssion ID for sonobuoy run. This can allow fallback
-// cleanup for this session by deleting any resources with
-// `sonobuoy-run=<sessionID>`
-func ApplyDefaultLabels(p plugin.Interface, labels map[string]string) map[string]string {
-	labels["component"] = "sonobuoy"
-	labels["tier"] = "analysis"
-	labels["sonobuoy-run"] = p.GetSessionID()
-	labels["sonobuoy-plugin"] = p.GetName()
-
-	return labels
 }

@@ -28,8 +28,11 @@ import (
 	"path"
 	"sync"
 
-	"github.com/golang/glog"
+	"github.com/heptio/sonobuoy/pkg/errlog"
 	"github.com/heptio/sonobuoy/pkg/plugin"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"github.com/viniciuschiele/tarx"
 )
 
 // Aggregator is responsible for taking results from an HTTP server (configured
@@ -118,7 +121,7 @@ func (a *Aggregator) HandleHTTPResult(result *plugin.Result, w http.ResponseWrit
 
 	// Make sure we were expecting this result
 	if !a.isResultExpected(result) {
-		glog.Warningf("Got unexpected result %v", resultID)
+		logrus.Warningf("Got unexpected result %v", resultID)
 		http.Error(
 			w,
 			fmt.Sprintf("Result %v unexpected", resultID),
@@ -129,7 +132,7 @@ func (a *Aggregator) HandleHTTPResult(result *plugin.Result, w http.ResponseWrit
 
 	// Don't allow duplicates
 	if a.isResultDuplicate(result) {
-		glog.Warningf("Got a duplicate result %v", resultID)
+		logrus.Warningf("Got a duplicate result %v", resultID)
 		http.Error(
 			w,
 			fmt.Sprintf("Result %v already received", resultID),
@@ -163,7 +166,7 @@ func (a *Aggregator) IngestResults(resultsCh <-chan *plugin.Result) {
 		// Don't consume results we're not expecting, unless they're
 		// errors (see below.)
 		if !a.isResultExpected(result) {
-			glog.Warningf("Result unexpected: %v", result)
+			logrus.Warningf("Result unexpected: %v", result)
 			continue
 		}
 
@@ -173,7 +176,7 @@ func (a *Aggregator) IngestResults(resultsCh <-chan *plugin.Result) {
 
 			// Don't consume results we've already seen
 			if a.isResultDuplicate(result) {
-				glog.Warningf("Duplicate result: %v", result)
+				logrus.Warningf("Duplicate result: %v", result)
 				return
 			}
 
@@ -196,26 +199,59 @@ func (a *Aggregator) handleResult(result *plugin.Result) error {
 	// Create the output directory for the result.  Will be of the
 	// form .../plugins/:results_type/:node.json (for DaemonSet plugins) or
 	// .../plugins/:results_type.json (for Job plugins)
-	resultsFile := path.Join(a.OutputDir, result.Path()+result.Extension())
+	resultsFile := path.Join(a.OutputDir, result.Path()+result.Extension)
 	resultsDir := path.Dir(resultsFile)
-	glog.Infof("Creating directory %v", resultsDir)
+	logrus.Infof("Creating directory %v", resultsDir)
 	if err := os.MkdirAll(resultsDir, 0755); err != nil {
-		glog.Errorf("Could not make directory %v: %v", resultsDir, err)
-
+		err = errors.Wrapf(err, "could not make directory %v", resultsDir)
+		errlog.LogError(err)
 		return err
 	}
 
-	// Open the results file for writing
-	f, err := os.Create(resultsFile)
+	// Write the results file out and close it
+	err := func() error {
+		f, err := os.Create(resultsFile)
+		if err != nil {
+			err = errors.Wrapf(err, "could not open output file %v for writing", resultsFile)
+			errlog.LogError(err)
+			return err
+		}
+		defer f.Close()
+
+		// Copy the request body into the file
+		_, err = io.Copy(f, result.Body)
+		if err != nil {
+			err = errors.Wrapf(err, "error writing plugin result")
+			errlog.LogError(err)
+			return err
+		}
+
+		return nil
+	}()
 	if err != nil {
-		glog.Errorf("Could not open output file %v for writing: %v", resultsFile, err)
 		return err
 	}
-	defer f.Close()
 
-	// Copy the request body into the file
-	io.Copy(f, result.Body)
-	glog.Infof("wrote results to %v\n", resultsFile)
+	// If it's a tarball, extract it
+	if result.Extension == ".tar.gz" {
+		resultsDir := path.Join(a.OutputDir, result.Path())
+
+		err = tarx.Extract(resultsFile, resultsDir, &tarx.ExtractOptions{})
+		if err != nil {
+			err = errors.Wrapf(err, "could not extract tar file %v", resultsFile)
+			errlog.LogError(err)
+			return err
+		}
+
+		err = os.Remove(resultsFile)
+		if err != nil {
+			return err
+		}
+
+		logrus.Infof("extracted results tarball into %v", resultsDir)
+	} else {
+		logrus.Infof("wrote results to %v", resultsFile)
+	}
 
 	return nil
 }

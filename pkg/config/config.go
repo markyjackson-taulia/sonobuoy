@@ -18,12 +18,19 @@ package config
 
 import (
 	"path"
+	"time"
 
+	"github.com/c2h5oh/datasize"
 	"github.com/heptio/sonobuoy/pkg/buildinfo"
 	"github.com/heptio/sonobuoy/pkg/plugin"
 	"github.com/satori/go.uuid"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+///////////////////////////////////////////////////////
+// Note: The described resources are a 1:1 match
+// with kubectl UX for consistent user experience.
+// xref: https://kubernetes.io/docs/api-reference/v1.8/
+///////////////////////////////////////////////////////
 
 // ClusterResources is the list of API resources that are scoped to the entire
 // cluster (ie. not to any particular namespace)
@@ -32,9 +39,11 @@ var ClusterResources = []string{
 	"ClusterRoleBindings",
 	"ClusterRoles",
 	"ComponentStatuses",
+	"CustomResourceDefinitions",
 	"Nodes",
 	"PersistentVolumes",
 	"PodSecurityPolicies",
+	"ServerGroups",
 	"ServerVersion",
 	"StorageClasses",
 	"ThirdPartyResources",
@@ -44,7 +53,8 @@ var ClusterResources = []string{
 // kubernetes namespace.
 var NamespacedResources = []string{
 	"ConfigMaps",
-	//"CronJobs",
+	"ControllerRevisions",
+	"CronJobs",
 	"DaemonSets",
 	"Deployments",
 	"Endpoints",
@@ -53,6 +63,7 @@ var NamespacedResources = []string{
 	"Ingresses",
 	"Jobs",
 	"LimitRanges",
+	"NetworkPolicies",
 	"PersistentVolumeClaims",
 	"PodDisruptionBudgets",
 	"PodLogs",
@@ -106,6 +117,11 @@ type Config struct {
 	Filters FilterOptions `json:"Filters" mapstructure:"Filters"`
 
 	///////////////////////////////////////////////
+	// Limit options
+	///////////////////////////////////////////////
+	Limits LimitConfig `json:"Limits" mapstructure:"Limits"`
+
+	///////////////////////////////////////////////
 	// plugin configurations settings
 	///////////////////////////////////////////////
 	Aggregation      plugin.AggregationConfig `json:"Server" mapstructure:"Server"`
@@ -115,14 +131,25 @@ type Config struct {
 	LoadedPlugins    []plugin.Interface       // this is assigned when plugins are loaded.
 }
 
-// FilterResources is a utility function used to parse Resources
-func (cfg *Config) FilterResources(filter []string) map[string]bool {
-	results := make(map[string]bool)
+// LimitConfig is a configuration on the limits of sizes of various responses.
+type LimitConfig struct {
+	PodLogs SizeOrTimeLimitConfig `json:"PodLogs" mapstructure:"PodLogs"`
+}
 
+// SizeOrTimeLimitConfig represents configuration that limits the size of
+// something either by a total disk size, or by a length of time.
+type SizeOrTimeLimitConfig struct {
+	LimitSize string `json:"LimitSize" mapstructure:"LimitSize"`
+	LimitTime string `json:"LimitTime" mapstructure:"LimitTime"`
+}
+
+// FilterResources is a utility function used to parse Resources
+func (cfg *Config) FilterResources(filter []string) []string {
+	var results []string
 	for _, felement := range filter {
 		for _, check := range cfg.Resources {
 			if felement == check {
-				results[felement] = true
+				results = append(results, felement)
 			}
 		}
 	}
@@ -133,6 +160,52 @@ func (cfg *Config) FilterResources(filter []string) map[string]bool {
 // UUID for this run.
 func (cfg *Config) OutputDir() string {
 	return path.Join(cfg.ResultsDir, cfg.UUID)
+}
+
+// SizeLimitBytes returns how many bytes the configuration is set to limit,
+// returning defaultVal if not set.
+func (c SizeOrTimeLimitConfig) SizeLimitBytes(defaultVal int64) int64 {
+	val, defaulted, err := c.sizeLimitBytes()
+
+	// Ignore error, since we should have already caught it in validation
+	if err != nil || defaulted {
+		return defaultVal
+	}
+
+	return val
+}
+
+func (c SizeOrTimeLimitConfig) sizeLimitBytes() (val int64, defaulted bool, err error) {
+	str := c.LimitSize
+	if str == "" {
+		return 0, true, nil
+	}
+
+	var bs datasize.ByteSize
+	err = bs.UnmarshalText([]byte(str))
+	return int64(bs.Bytes()), false, err
+}
+
+// TimeLimitDuration returns the duration the configuration is set to limit, returning defaultVal if not set.
+func (c SizeOrTimeLimitConfig) TimeLimitDuration(defaultVal time.Duration) time.Duration {
+	val, defaulted, err := c.timeLimitDuration()
+
+	// Ignore error, since we should have already caught it in validation
+	if err != nil || defaulted {
+		return defaultVal
+	}
+
+	return val
+}
+
+func (c SizeOrTimeLimitConfig) timeLimitDuration() (val time.Duration, defaulted bool, err error) {
+	str := c.LimitTime
+	if str == "" {
+		return 0, true, nil
+	}
+
+	val, err = time.ParseDuration(str)
+	return val, false, err
 }
 
 // NewWithDefaults returns a newly-constructed Config object with default values.
@@ -148,11 +221,11 @@ func NewWithDefaults() *Config {
 	cfg.Resources = ClusterResources
 	cfg.Resources = append(cfg.Resources, NamespacedResources...)
 
-	cfg.PluginNamespace = metav1.NamespaceSystem
+	cfg.PluginNamespace = "heptio-sonobuoy"
 
 	cfg.Aggregation.BindAddress = "0.0.0.0"
 	cfg.Aggregation.BindPort = 8080
-	cfg.Aggregation.TimeoutSeconds = 1800 // 30 minutes
+	cfg.Aggregation.TimeoutSeconds = 5400 // 90 minutes
 
 	cfg.PluginSearchPath = []string{
 		"./plugins.d",

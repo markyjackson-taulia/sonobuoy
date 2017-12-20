@@ -20,9 +20,11 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/golang/glog"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 // GatherResults is the consumer of a co-scheduled container that agrees on the following
@@ -34,15 +36,16 @@ import (
 func GatherResults(waitfile string, url string) error {
 	var inputFileName []byte
 	var err error
+	var outfile *os.File
 
 	// just loop looking for a file.
 	done := false
-	glog.Infof("Waiting on: (%v)", waitfile)
+	logrus.Infof("Waiting on: (%v)", waitfile)
 	for !done {
 		inputFileName, err = ioutil.ReadFile(waitfile) // For read access.
 		if err != nil {
 			// There is no need to log here, just wait for the results.
-			glog.V(5).Infof("Sleeping")
+			logrus.Infof("Sleeping")
 			time.Sleep(1 * time.Second)
 		} else {
 			done = true
@@ -50,15 +53,24 @@ func GatherResults(waitfile string, url string) error {
 	}
 
 	s := string(inputFileName)
-	glog.Infof("Detected done file, transmitting: (%v)", s)
+	logrus.Infof("Detected done file, transmitting: (%v)", s)
+
+	// Append a file extension, if there is one
+	filenameParts := strings.SplitN(s, ".", 2)
+	if len(filenameParts) == 2 {
+		url += "." + filenameParts[1]
+	}
+
+	defer func() {
+		if outfile != nil {
+			outfile.Close()
+		}
+	}()
 
 	// transmit back the results file.
 	return DoRequest(url, func() (io.Reader, error) {
-		outfile, err := os.Open(s)
-		if err != nil {
-			glog.Errorf("Failed to open file (%s)", s)
-			return nil, err
-		}
-		return outfile, err
+		outfile, err = os.Open(s)
+		return outfile, errors.WithStack(err)
 	})
+
 }

@@ -1,4 +1,4 @@
-# Conformance Testing - [1.7+][10]
+# Conformance Testing - [1.7+][6]
 
 * [Overview][0]
 * [Integration with Sonobuoy][1]
@@ -28,15 +28,15 @@ See the [official documentation][4] of Kubernetes's existing conformance tests.
 
 Sonobuoy's [plugin architecture][5] enables you to integrate conformance test results into your reporting.  The e2e tests can be configured via the plugin mechanism and are set up by default to run the basic set of conformance tests against a local provider.
 
-To customize the set of tests that will be run as part of the report, the following [environmental variables][6] can be set in the [plugin-specific YAML config][7]:
+To customize the set of tests that will be run as part of the report, the following environmental variables can be set in the [plugin-specific YAML config][7]:
 
 | Variable | Default Value | Description |
 |---|---|---|
-| `E2E_FOCUS` | "Conformance" | The test suite to run |
+| `E2E_FOCUS` | "Conformance" | The test suite to run.<br><br>*NOTE*: Because the real conformance suite can take up to half an hour to run, the quickstart example's [e2e config][8] specifies just a single test, "Pods should be submitted and removed". |
 | `E2E_SKIP` | "Alpha&#124;Disruptive&#124;Feature&#124;Flaky&#124;Kubectl" | Which subset of tests to skip |
 | `E2E_PROVIDER` | "local" | The platform that the cluster is running on |
 
-*NOTE: The provided e2e config in the quickstart example has `E2E_FOCUS` set to “Pods should be submitted and removed” rather than "Conformance", for the sake of convenience. The real conformance suite can take up to half an hour to run; to avoid this, the example runs just a single test. To run the "Conformance" suite you can simply comment out the [env section][8] of the quickstart.  Also, the length of time it takes to run conformance can vary based on the size of your cluster---the timeout can be adjusted [here][9].*
+*NOTE: The length of time it takes to run conformance can vary based on the size of your cluster---the timeout can be adjusted in the [Server.timeoutseconds][9] field of the Sonobuoy `config.json`.*
 
 [0]: #overview
 [1]: #integration-with-sonobuoy
@@ -44,8 +44,7 @@ To customize the set of tests that will be run as part of the report, the follow
 [3]: https://kubernetes.io/docs/admin/node-conformance/
 [4]: https://github.com/kubernetes/community/blob/master/contributors/devel/e2e-tests.md#conformance-tests
 [5]: plugins.md
-[6]: https://github.com/heptio/sonobuoy/blob/master/build/Dockerfile
-[7]: https://github.com/heptio/sonobuoy/blob/master/plugins.d/e2e.yaml
-[8]: https://github.com/heptio/sonobuoy/blob/master/examples/quickstart/10-configmaps.yaml#L185
-[9]: https://github.com/heptio/sonobuoy/blob/master/examples/quickstart/10-configmaps.yaml#L71
-[10]: https://github.com/kubernetes/kubernetes/issues/49313
+[6]: https://github.com/kubernetes/kubernetes/issues/49313
+[7]: ../plugins.d/e2e.tmpl
+[8]: ../examples/quickstart.yaml#L133
+[9]: ../examples/quickstart.yaml#L102

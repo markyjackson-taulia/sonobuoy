@@ -19,9 +19,10 @@ package worker
 import (
 	"io/ioutil"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path"
-	"strconv"
 	"testing"
 
 	"github.com/heptio/sonobuoy/pkg/plugin"
@@ -40,9 +41,9 @@ func TestRun(t *testing.T) {
 		})
 	}
 
-	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator) {
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, baseURL string) {
 		for _, h := range hosts {
-			url := "http://:" + strconv.Itoa(aggregatorPort) + "/api/v1/results/by-node/" + h + "/systemd_logs"
+			url := baseURL + "/api/v1/results/by-node/" + h + "/systemd_logs.json"
 
 			withTempDir(t, func(tmpdir string) {
 				ioutil.WriteFile(tmpdir+"/systemd_logs", []byte("{}"), 0755)
@@ -52,24 +53,43 @@ func TestRun(t *testing.T) {
 					t.Fatalf("Got error running agent: %v", err)
 				}
 
-				logsPath := path.Join(aggr.OutputDir, "systemd_logs", "results", "node1.json")
-				if _, err := os.Stat(logsPath); err != nil && os.IsNotExist(err) {
-					t.Errorf("Systemd logs agent ran, but couldn't find expected results at %v", logsPath)
-				}
+				ensureExists(t, path.Join(aggr.OutputDir, "systemd_logs", "results", "node1.json"))
 			})
 		}
 	})
 }
 
 func TestRunGlobal(t *testing.T) {
-	url := "http://:" + strconv.Itoa(aggregatorPort) + "/api/v1/results/global/systemd_logs"
 
 	// Create an expectedResults array
 	expectedResults := []plugin.ExpectedResult{
 		plugin.ExpectedResult{ResultType: "systemd_logs"},
 	}
 
-	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator) {
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, baseURL string) {
+		url := baseURL + "/api/v1/results/global/systemd_logs"
+		withTempDir(t, func(tmpdir string) {
+			ioutil.WriteFile(tmpdir+"/systemd_logs.json", []byte("{}"), 0755)
+			ioutil.WriteFile(tmpdir+"/done", []byte(tmpdir+"/systemd_logs.json"), 0755)
+			err := GatherResults(tmpdir+"/done", url)
+			if err != nil {
+				t.Fatalf("Got error running agent: %v", err)
+			}
+
+			ensureExists(t, path.Join(aggr.OutputDir, "systemd_logs", "results.json"))
+		})
+	})
+}
+
+func TestRunGlobal_noExtension(t *testing.T) {
+
+	// Create an expectedResults array
+	expectedResults := []plugin.ExpectedResult{
+		plugin.ExpectedResult{ResultType: "systemd_logs"},
+	}
+
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, baseURL string) {
+		url := baseURL + "/api/v1/results/global/systemd_logs"
 		withTempDir(t, func(tmpdir string) {
 			ioutil.WriteFile(tmpdir+"/systemd_logs", []byte("{}"), 0755)
 			ioutil.WriteFile(tmpdir+"/done", []byte(tmpdir+"/systemd_logs"), 0755)
@@ -78,15 +98,21 @@ func TestRunGlobal(t *testing.T) {
 				t.Fatalf("Got error running agent: %v", err)
 			}
 
-			logsPath := path.Join(aggr.OutputDir, "systemd_logs", "results.json")
-			if _, err := os.Stat(logsPath); err != nil && os.IsNotExist(err) {
-				t.Errorf("Systemd logs agent ran, but couldn't find expected results at %v", logsPath)
-			}
+			ensureExists(t, path.Join(aggr.OutputDir, "systemd_logs", "results"))
 		})
 	})
 }
 
 const aggregatorPort = 8090
+
+func ensureExists(t *testing.T, filepath string) {
+	if _, err := os.Stat(filepath); err != nil && os.IsNotExist(err) {
+		t.Logf("Plugin agent ran, but couldn't find expected results at %v:", filepath)
+		output, _ := exec.Command("ls", "-l", path.Dir(filepath)).CombinedOutput()
+		t.Log(string(output))
+		t.Fail()
+	}
+}
 
 func withTempDir(t *testing.T, callback func(tmpdir string)) {
 	// Create a temporary directory for results gathering
@@ -99,26 +125,17 @@ func withTempDir(t *testing.T, callback func(tmpdir string)) {
 	callback(tmpdir)
 }
 
-func withAggregator(t *testing.T, expectedResults []plugin.ExpectedResult, callback func(*aggregation.Aggregator)) {
+func withAggregator(t *testing.T, expectedResults []plugin.ExpectedResult, callback func(*aggregation.Aggregator, string)) {
 	withTempDir(t, func(tmpdir string) {
 		// Reset the default transport to clear any connection pooling
 		http.DefaultTransport = &http.Transport{}
 
 		// Configure the aggregator
 		aggr := aggregation.NewAggregator(tmpdir, expectedResults)
-		srv := aggregation.NewServer(":"+strconv.Itoa(aggregatorPort), aggr.HandleHTTPResult)
+		handler := aggregation.NewHandler(aggr.HandleHTTPResult)
+		srv := httptest.NewServer(handler)
+		defer srv.Close()
 
-		// Run the aggregation server
-		done := make(chan error)
-		go func() {
-			done <- srv.Start()
-		}()
-		defer func() {
-			srv.Stop()
-			<-done
-		}()
-		srv.WaitUntilReady()
-
-		callback(aggr)
+		callback(aggr, srv.URL)
 	})
 }

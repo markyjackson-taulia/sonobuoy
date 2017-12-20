@@ -17,12 +17,11 @@ limitations under the License.
 package aggregation
 
 import (
+	"bytes"
 	"io/ioutil"
 	"net/http"
-	"net/url"
+	"net/http/httptest"
 	"os"
-	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/heptio/sonobuoy/pkg/plugin"
@@ -32,7 +31,7 @@ func TestStart(t *testing.T) {
 	checkins := make(map[string]*plugin.Result, 0)
 
 	expectedResult := "systemd_logs/results/testnode"
-	expectedJSON := `{"some": "json"}`
+	expectedJSON := []byte(`{"some": "json"}`)
 
 	tmpdir, err := ioutil.TempDir("", "sonobuoy_server_test")
 	if err != nil {
@@ -42,22 +41,16 @@ func TestStart(t *testing.T) {
 	}
 	defer os.RemoveAll(tmpdir)
 
-	server := NewServer("127.0.0.1:"+strconv.Itoa(testPort), func(checkin *plugin.Result, w http.ResponseWriter) {
+	h := NewHandler(func(checkin *plugin.Result, w http.ResponseWriter) {
 		// Just take note of what we've received
 		checkins[checkin.Path()] = checkin
 	})
 
-	// Use buffered channels for simplicity so we don't have to have every last
-	// thing be async
-	done := make(chan error, 1)
-
-	go func() {
-		done <- server.Start()
-	}()
-	server.WaitUntilReady()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
 
 	// Expect a 404 and no results
-	response := doRequest(t, "PUT", "/not/found", expectedJSON)
+	response := doRequest(t, srv, "PUT", "/not/found", expectedJSON)
 	if response.StatusCode != 404 {
 		t.Fatalf("Expected a 404 response, got %v", response.StatusCode)
 		t.Fail()
@@ -68,7 +61,7 @@ func TestStart(t *testing.T) {
 	}
 
 	// PUT is all that is accepted
-	response = doRequest(t, "POST", "/api/v1/results/by-node/testnode/systemd_logs", expectedJSON)
+	response = doRequest(t, srv, "POST", "/api/v1/results/by-node/testnode/systemd_logs", expectedJSON)
 	if response.StatusCode != 405 {
 		t.Fatalf("Expected a 405 response, got %v", response.StatusCode)
 		t.Fail()
@@ -79,7 +72,7 @@ func TestStart(t *testing.T) {
 	}
 
 	// Happy path
-	response = doRequest(t, "PUT", "/api/v1/results/by-node/testnode/systemd_logs", expectedJSON)
+	response = doRequest(t, srv, "PUT", "/api/v1/results/by-node/testnode/systemd_logs", expectedJSON)
 	if response.StatusCode != 200 {
 		t.Fatalf("Client got non-200 status from server: %v", response.StatusCode)
 		t.Fail()
@@ -89,54 +82,26 @@ func TestStart(t *testing.T) {
 		t.Fatalf("Valid request for %v did not get recorded", expectedResult)
 		t.Fail()
 	}
-
-	server.Stop()
-	err = <-done
-	if err != nil {
-		t.Fatalf("Server returned error: %v", err)
-		t.Fail()
-	}
 }
 
-var testPort = 8099
-
-func doRequest(t *testing.T, method, path, body string) *http.Response {
+func doRequest(t *testing.T, srv *httptest.Server, method, path string, body []byte) *http.Response {
 	// Make a new HTTP transport for every request, this avoids issues where HTTP
 	// connection keep-alive leaves connections running to old server instances.
 	// (We can take the performance hit since it's just tests.)
-	trn := &http.Transport{DisableKeepAlives: true}
-	client := &http.Client{Transport: trn}
-	resultsURL := url.URL{
-		Scheme: "http",
-		Host:   "0.0.0.0:" + strconv.Itoa(testPort),
-		Path:   path,
-	}
-
 	req, err := http.NewRequest(
 		method,
-		resultsURL.String(),
-		strings.NewReader(body),
+		srv.URL+path,
+		bytes.NewReader(body),
 	)
 	if err != nil {
 		t.Fatalf("error constructing request: %v", err)
 		t.Fail()
 	}
 
-	resp, err := client.Do(req)
+	resp, err := srv.Client().Do(req)
 	if err != nil {
 		t.Fatalf("error performing request: %v", err)
 		t.Fail()
 	}
 	return resp
-}
-
-func ensureNoResults(t *testing.T, results chan *plugin.Result) {
-	select {
-	case r := <-results:
-		t.Fatalf("Result found when none should be present: %v", r)
-		t.Fail()
-		break
-	default:
-		break
-	}
 }
