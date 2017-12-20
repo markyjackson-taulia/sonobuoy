@@ -6,3 +6,5 @@
 
 # Development manifest
 examples/dev.yaml
+.idea/inspectionProfiles/
+.idea/workspace.xml
