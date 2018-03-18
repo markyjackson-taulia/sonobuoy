@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -48,6 +48,10 @@ func LoadConfig() (*plugin.WorkerConfig, error) {
 	viper.BindEnv("nodename", "NODE_NAME")
 	viper.BindEnv("resultsdir", "RESULTS_DIR")
 	viper.BindEnv("resulttype", "RESULT_TYPE")
+
+	viper.BindEnv("cacert", "CA_CERT")
+	viper.BindEnv("clientcert", "CLIENT_CERT")
+	viper.BindEnv("clientkey", "CLIENT_KEY")
 
 	setConfigDefaults(config)
 

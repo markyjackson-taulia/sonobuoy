@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,16 +17,20 @@ limitations under the License.
 package aggregation
 
 import (
+	"fmt"
+	"net"
 	"net/http"
-	"strconv"
 	"time"
 
+	"github.com/heptio/sonobuoy/pkg/backplane/ca"
 	"github.com/heptio/sonobuoy/pkg/plugin"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
+
+var annotationUpdateFreq = 5 * time.Second
 
 // Run runs an aggregation server and gathers results, in accordance with the
 // given sonobuoy configuration.
@@ -41,7 +45,7 @@ import (
 // 4. Hook the shared monitoring channel up to aggr's IngestResults() function
 // 5. Block until aggr shows all results accounted for (results come in through
 //    the HTTP callback), stopping the HTTP server on completion
-func Run(client kubernetes.Interface, plugins []plugin.Interface, cfg plugin.AggregationConfig, outdir string) error {
+func Run(client kubernetes.Interface, plugins []plugin.Interface, cfg plugin.AggregationConfig, namespace, outdir string) error {
 	// Construct a list of things we'll need to dispatch
 	if len(plugins) == 0 {
 		logrus.Info("Skipping host data gathering: no plugins defined")
@@ -63,6 +67,11 @@ func Run(client kubernetes.Interface, plugins []plugin.Interface, cfg plugin.Agg
 		expectedResults = append(expectedResults, p.ExpectedResults(nodes.Items)...)
 	}
 
+	auth, err := ca.NewAuthority()
+	if err != nil {
+		return errors.Wrap(err, "couldn't make new certificate authority for plugin aggregator")
+	}
+
 	logrus.Infof("Starting server Expected Results: %v", expectedResults)
 
 	// 1. Await results from each plugin
@@ -76,48 +85,88 @@ func Run(client kubernetes.Interface, plugins []plugin.Interface, cfg plugin.Agg
 		doneAggr <- true
 	}()
 
+	// AdvertiseAddress often has a port, split this off if so
+	advertiseAddress := cfg.AdvertiseAddress
+	if host, _, err := net.SplitHostPort(cfg.AdvertiseAddress); err == nil {
+		advertiseAddress = host
+	}
+
+	tlsCfg, err := auth.MakeServerConfig(advertiseAddress)
+	if err != nil {
+		return errors.Wrap(err, "couldn't get a server certificate")
+	}
+
 	// 2. Launch the aggregation servers
 	srv := &http.Server{
-		Addr:    cfg.BindAddress + ":" + strconv.Itoa(cfg.BindPort),
-		Handler: NewHandler(aggr.HandleHTTPResult),
+		Addr:      fmt.Sprintf("%s:%d", cfg.BindAddress, cfg.BindPort),
+		Handler:   NewHandler(aggr.HandleHTTPResult),
+		TLSConfig: tlsCfg,
 	}
+
 	doneServ := make(chan error)
 	go func() {
-		doneServ <- srv.ListenAndServe()
+		logrus.WithFields(logrus.Fields{
+			"address": cfg.BindAddress,
+			"port":    cfg.BindPort,
+		}).Info("starting aggregation server")
+		doneServ <- srv.ListenAndServeTLS("", "")
 	}()
 
-	// 3. Launch each plugin, to dispatch workers which submit the results back
+	updater := newUpdater(expectedResults, namespace, client)
+	ticker := time.NewTicker(annotationUpdateFreq)
+
+	// 3. Regularly annotate the Aggregator pod with the current run status
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			updater.ReceiveAll(aggr.Results)
+			if err := updater.Annotate(); err != nil {
+				logrus.WithError(err).Info("couldn't annotate sonobuoy pod")
+			}
+			if aggr.isComplete() {
+				return
+			}
+		}
+	}()
+
+	// 4. Launch each plugin, to dispatch workers which submit the results back
 	for _, p := range plugins {
-		logrus.Infof("Running (%v) plugin", p.GetName())
-		err := p.Run(client)
-		// Have the plugin monitor for errors
-		go p.Monitor(client, nodes.Items, monitorCh)
+		cert, err := auth.ClientKeyPair(p.GetName())
 		if err != nil {
+			return errors.Wrapf(err, "couldn't make certificate for plugin %v", p.GetName())
+		}
+		logrus.WithField("plugin", p.GetName()).Info("Running plugin")
+		if err = p.Run(client, cfg.AdvertiseAddress, cert); err != nil {
 			return errors.Wrapf(err, "error running plugin %v", p.GetName())
 		}
+		// Have the plugin monitor for errors
+		go p.Monitor(client, nodes.Items, monitorCh)
 	}
-	// 4. Have the aggregator plumb results from each plugins' monitor function
+	// 5. Have the aggregator plumb results from each plugins' monitor function
 	go aggr.IngestResults(monitorCh)
 
+	// Give the plugins a chance to cleanup before a hard timeout occurs
+	shutdownPlugins := time.After(time.Duration(cfg.TimeoutSeconds-plugin.GracefulShutdownPeriod) * time.Second)
 	// Ensure we only wait for results for a certain time
 	timeout := time.After(time.Duration(cfg.TimeoutSeconds) * time.Second)
 
-	// 5. Wait for aggr to show that all results are accounted for
-	select {
-	case <-timeout:
-		srv.Close()
-		stopWaitCh <- true
-		return errors.Errorf("timed out waiting for plugins, shutting down HTTP server")
-	case err := <-doneServ:
-		stopWaitCh <- true
-		if err != nil {
+	// 6. Wait for aggr to show that all results are accounted for
+	for {
+		select {
+		case <-shutdownPlugins:
+			Cleanup(client, plugins)
+			logrus.Info("Gracefully shutting down plugins due to timeout.")
+		case <-timeout:
+			srv.Close()
+			stopWaitCh <- true
+			return errors.Errorf("timed out waiting for plugins, shutting down HTTP server")
+		case err := <-doneServ:
+			stopWaitCh <- true
 			return err
+		case <-doneAggr:
+			return nil
 		}
-	case <-doneAggr:
-		break
 	}
-
-	return nil
 }
 
 // Cleanup calls cleanup on all plugins

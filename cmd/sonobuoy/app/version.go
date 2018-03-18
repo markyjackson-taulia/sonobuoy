@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -31,9 +31,9 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print sonobuoy version",
 	Run:   runVersion,
+	Args:  cobra.ExactArgs(0),
 }
 
 func runVersion(cmd *cobra.Command, args []string) {
 	fmt.Println(buildinfo.Version)
-	fmt.Println("Configured docker image:", buildinfo.DockerImage)
 }

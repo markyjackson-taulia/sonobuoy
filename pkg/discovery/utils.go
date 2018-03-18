@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,21 +29,21 @@ import (
 )
 
 // FilterNamespaces filter the list of namespaces according to the filter string
-func FilterNamespaces(kubeClient kubernetes.Interface, filter string) []string {
+func FilterNamespaces(kubeClient kubernetes.Interface, filter string) ([]string, error) {
 	var validns []string
 	re := regexp.MustCompile(filter)
 	nslist, err := kubeClient.CoreV1().Namespaces().List(metav1.ListOptions{})
-	if err == nil {
-		for _, ns := range nslist.Items {
-			logrus.Infof("Namespace %v Matched=%v", ns.Name, re.MatchString(ns.Name))
-			if re.MatchString(ns.Name) {
-				validns = append(validns, ns.Name)
-			}
-		}
-	} else {
-		panic(err.Error())
+	if err != nil {
+		return nil, errors.WithStack(err)
 	}
-	return validns
+
+	for _, ns := range nslist.Items {
+		logrus.Infof("Namespace %v Matched=%v", ns.Name, re.MatchString(ns.Name))
+		if re.MatchString(ns.Name) {
+			validns = append(validns, ns.Name)
+		}
+	}
+	return validns, nil
 }
 
 // SerializeObj will write out an object

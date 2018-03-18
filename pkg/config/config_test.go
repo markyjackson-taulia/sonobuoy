@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,8 +22,8 @@ import (
 )
 
 func TestDefaults(t *testing.T) {
-	cfg1 := NewWithDefaults()
-	cfg2 := NewWithDefaults()
+	cfg1 := New()
+	cfg2 := New()
 
 	if reflect.DeepEqual(&cfg2, &cfg1) {
 		t.Fatalf("Defaults should not match UUIDs collided")

@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,26 +25,31 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+
+	"k8s.io/client-go/kubernetes"
 )
 
 var noExit bool
+var kubecfg Kubeconfig
 
 func init() {
 	cmd := &cobra.Command{
-		Use:   "master",
-		Short: "Generate reports on your kubernetes cluster",
-		Long:  "Sonobuoy is an introspective kubernetes component that generates reports on cluster conformance, configuration, and more",
-		Run:   runMaster,
+		Use:    "master",
+		Short:  "Runs the master/aggregator component (for internal use)",
+		Long:   "Sonobuoy is an introspective kubernetes component that generates reports on cluster conformance, configuration, and more",
+		Run:    runMaster,
+		Hidden: true,
+		Args:   cobra.ExactArgs(0),
 	}
 	cmd.PersistentFlags().BoolVar(
 		&noExit, "no-exit", false,
 		"Use this if you want sonobuoy to block and not exit. Useful when you want to explicitly grab results.tar.gz",
 	)
+	AddKubeconfigFlag(&kubecfg, cmd.Flags())
 	RootCmd.AddCommand(cmd)
 }
 
 func runMaster(cmd *cobra.Command, args []string) {
-	exit := 0
 
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -52,22 +57,25 @@ func runMaster(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// Load a kubernetes client
-	kubeClient, err := config.LoadClient(cfg)
+	kcfg, err := kubecfg.Get()
+	if err != nil {
+		errlog.LogError(err)
+		os.Exit(1)
+	}
+
+	clientset, err := kubernetes.NewForConfig(kcfg)
 	if err != nil {
 		errlog.LogError(err)
 		os.Exit(1)
 	}
 
 	// Run Discovery (gather API data, run plugins)
-	if errcount := discovery.Run(kubeClient, cfg); errcount > 0 {
-		exit = 1
-	}
+	errcount := discovery.Run(clientset, cfg)
 
 	if noExit {
 		logrus.Info("no-exit was specified, sonobuoy is now blocking")
 		select {}
 	}
 
-	os.Exit(exit)
+	os.Exit(errcount)
 }

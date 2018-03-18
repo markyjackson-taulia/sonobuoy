@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,6 +25,22 @@ import (
 	"github.com/heptio/sonobuoy/pkg/plugin"
 	"github.com/satori/go.uuid"
 )
+
+const (
+	// DefaultNamespace is the namespace where the master and plugin workers will run (but not necessarily the pods created by the plugin workers).
+	DefaultNamespace = "heptio-sonobuoy"
+	// DefaultKubeConformanceImage is the URL of the docker image to run for the kube conformance tests
+	DefaultKubeConformanceImage = "gcr.io/heptio-images/kube-conformance:latest"
+	// MasterPodName is the name of the main pod that runs plugins and collects results.
+	MasterPodName = "sonobuoy"
+	// MasterContainerName is the name of the main container in the master pod.
+	MasterContainerName = "kube-sonobuoy"
+	// MasterResultsPath is the location in the main container of the master pod where results will be archived.
+	MasterResultsPath = "/tmp/sonobuoy"
+)
+
+// DefaultImage is the URL of the docker image to run for the aggregator and workers
+var DefaultImage = "gcr.io/heptio-images/sonobuoy:" + buildinfo.Version
 
 ///////////////////////////////////////////////////////
 // Note: The described resources are a 1:1 match
@@ -104,7 +120,6 @@ type Config struct {
 	UUID        string `json:"UUID" mapstructure:"UUID"`
 	Version     string `json:"Version" mapstructure:"Version"`
 	ResultsDir  string `json:"ResultsDir" mapstructure:"ResultsDir"`
-	Kubeconfig  string `json:"Kubeconfig" mapstructure:"Kubeconfig"`
 
 	///////////////////////////////////////////////
 	// Data collection options
@@ -127,8 +142,14 @@ type Config struct {
 	Aggregation      plugin.AggregationConfig `json:"Server" mapstructure:"Server"`
 	PluginSelections []plugin.Selection       `json:"Plugins" mapstructure:"Plugins"`
 	PluginSearchPath []string                 `json:"PluginSearchPath" mapstructure:"PluginSearchPath"`
-	PluginNamespace  string                   `json:"PluginNamespace" mapstructure:"PluginNamespace"`
+	Namespace        string                   `json:"Namespace" mapstructure:"Namespace"`
 	LoadedPlugins    []plugin.Interface       // this is assigned when plugins are loaded.
+
+	///////////////////////////////////////////////
+	// sonobuoy configuration
+	///////////////////////////////////////////////
+	WorkerImage     string `json:"WorkerImage" mapstructure:"WorkerImage"`
+	ImagePullPolicy string `json:"ImagePullPolicy" mapstructure:"ImagePullPolicy"`
 }
 
 // LimitConfig is a configuration on the limits of sizes of various responses.
@@ -208,12 +229,12 @@ func (c SizeOrTimeLimitConfig) timeLimitDuration() (val time.Duration, defaulted
 	return val, false, err
 }
 
-// NewWithDefaults returns a newly-constructed Config object with default values.
-func NewWithDefaults() *Config {
+// New returns a newly-constructed Config object with default values.
+func New() *Config {
 	var cfg Config
 	cfg.UUID = uuid.NewV4().String()
 	cfg.Description = "DEFAULT"
-	cfg.ResultsDir = "./results"
+	cfg.ResultsDir = "/tmp/sonobuoy"
 	cfg.Version = buildinfo.Version
 
 	cfg.Filters.Namespaces = ".*"
@@ -221,7 +242,7 @@ func NewWithDefaults() *Config {
 	cfg.Resources = ClusterResources
 	cfg.Resources = append(cfg.Resources, NamespacedResources...)
 
-	cfg.PluginNamespace = "heptio-sonobuoy"
+	cfg.Namespace = DefaultNamespace
 
 	cfg.Aggregation.BindAddress = "0.0.0.0"
 	cfg.Aggregation.BindPort = 8080
@@ -232,6 +253,10 @@ func NewWithDefaults() *Config {
 		"/etc/sonobuoy/plugins.d",
 		"~/sonobuoy/plugins.d",
 	}
+
+	// TODO (timothysc) reference the other consts
+	cfg.WorkerImage = "gcr.io/heptio-images/sonobuoy:latest"
+	cfg.ImagePullPolicy = "Always"
 
 	return &cfg
 }

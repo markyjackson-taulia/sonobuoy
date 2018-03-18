@@ -12,17 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Note the only reason we are creating this is because upstream
-# does not yet publish a released e2e container
-# https://github.com/kubernetes/kubernetes/issues/47920
-
-EXAMPLES = $(wildcard examples/ksonnet/*.jsonnet)
-EXAMPLES_OUTPUT = $(patsubst examples/ksonnet/%.jsonnet,examples/%.yaml,$(EXAMPLES))
-
-KSONNET_BUILD_IMAGE = ksonnet/ksonnet-lib:beta.2
-
-PLUGINS = $(wildcard plugins.d/*.jsonnet)
-PLUGINS_OUTPUT = $(patsubst plugins.d/%.jsonnet,plugins.d/%.tmpl,$(PLUGINS))
 
 TARGET = sonobuoy
 GOTARGET = github.com/heptio/$(TARGET)
@@ -41,12 +30,16 @@ VERBOSE_FLAG = -v
 endif
 BUILDMNT = /go/src/$(GOTARGET)
 BUILD_IMAGE ?= gcr.io/heptio-images/golang:1.9-alpine3.6
-BUILDCMD = go build -o $(TARGET) $(VERBOSE_FLAG) -ldflags "-X github.com/heptio/sonobuoy/pkg/buildinfo.Version=$(GIT_VERSION) -X github.com/heptio/sonobuoy/pkg/buildinfo.DockerImage=$(REGISTRY)/$(TARGET):$(GIT_REF)"
+BUILDCMD = go build -o $(TARGET) $(VERBOSE_FLAG) -ldflags "-X github.com/heptio/sonobuoy/pkg/buildinfo.Version=$(GIT_VERSION)"
 BUILD = $(BUILDCMD) $(GOTARGET)
 
 TESTARGS ?= $(VERBOSE_FLAG) -timeout 60s
 TEST_PKGS ?= $(GOTARGET)/cmd/... $(GOTARGET)/pkg/...
-TEST = go test $(TEST_PKGS) $(TESTARGS)
+TEST_CMD = go test $(TESTARGS)
+TEST = $(TEST_CMD) $(TEST_PKGS) 
+
+INT_TEST_PKGS ?= $(GOTARGET)/test/...
+INT_TEST= $(TEST_CMD) $(INT_TEST_PKGS)
 
 VET = go vet $(TEST_PKGS)
 
@@ -55,22 +48,22 @@ GOLINT_FLAGS ?= -set_exit_status
 LINT = golint $(GOLINT_FLAGS) $(TEST_PKGS)
 
 WORKDIR ?= /sonobuoy
-RBAC_ENABLED ?= 1
-KUBECFG_CMD = $(DOCKER) run \
-  -v $(DIR):$(WORKDIR) \
-	--workdir $(WORKDIR) \
-	--rm \
-	$(KSONNET_BUILD_IMAGE) \
-	kubecfg show -o yaml -V RBAC_ENABLED=$(RBAC_ENABLED) -J $(WORKDIR) -o yaml $< > $@
-
 DOCKER_BUILD ?= $(DOCKER) run --rm -v $(DIR):$(BUILDMNT) -w $(BUILDMNT) $(BUILD_IMAGE) /bin/sh -c
 
-.PHONY: all container push clean cbuild test local generate plugins
+.PHONY: all container push clean cbuild test local-test local generate plugins int 
 
 all: container
 
+local-test: 
+	$(TEST)
+
+# Unit tests 
 test: cbuild vet
 	$(DOCKER_BUILD) '$(TEST)'
+
+# Integration tests
+int: cbuild
+	$(DOCKER_BUILD) '$(INT_TEST)'
 
 lint:
 	$(DOCKER_BUILD) '$(LINT)'
@@ -78,7 +71,7 @@ lint:
 vet:
 	$(DOCKER_BUILD) '$(VET)'
 
-container: test
+container:
 	$(DOCKER) build \
 		-t $(REGISTRY)/$(TARGET):$(IMAGE_VERSION) \
 		-t $(REGISTRY)/$(TARGET):$(IMAGE_BRANCH) \
@@ -101,19 +94,3 @@ push:
 clean:
 	rm -f $(TARGET)
 	$(DOCKER) rmi $(REGISTRY)/$(TARGET) || true
-	find ./examples/ -type f -name '*.yaml' -delete
-
-generate: latest-ksonnet examples plugins
-
-plugins: $(PLUGINS_OUTPUT)
-
-plugins.d/%.tmpl: plugins.d/%.jsonnet
-	$(KUBECFG_CMD)
-
-examples: $(EXAMPLES_OUTPUT)
-
-examples/%.yaml: examples/ksonnet/%.jsonnet
-	$(KUBECFG_CMD)
-
-latest-ksonnet:
-	$(DOCKER) pull $(KSONNET_BUILD_IMAGE)
