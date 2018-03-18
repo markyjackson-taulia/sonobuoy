@@ -6,5 +6,11 @@
 
 # Development manifest
 examples/dev.yaml
+<<<<<<< HEAD
 .idea/inspectionProfiles/
 .idea/workspace.xml
+=======
+
+# Unencrypted credentials
+heptio-images-ee4b0474b93e.json
+>>>>>>> upstream/master

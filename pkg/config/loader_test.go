@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ import (
 )
 
 func TestSaveAndLoad(t *testing.T) {
-	cfg := NewWithDefaults()
+	cfg := New()
 
 	cfg.Filters.Namespaces = "funky*"
 
@@ -45,8 +45,6 @@ func TestSaveAndLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Tests shouldn't fail just because KUBECONFIG is customized
-	cfg2.Kubeconfig = cfg.Kubeconfig
 	// And we can't predict what advertise address we'll detect
 	cfg2.Aggregation.AdvertiseAddress = cfg.Aggregation.AdvertiseAddress
 	// And UUID's won't match either
@@ -104,9 +102,9 @@ func TestDefaultResources(t *testing.T) {
 
 func TestLoadAllPlugins(t *testing.T) {
 	cfg := &Config{
-		PluginSearchPath: []string{"./plugins.d"},
+		PluginSearchPath: []string{"./examples/plugins.d"},
 		PluginSelections: []plugin.Selection{
-			plugin.Selection{Name: "systemd_logs"},
+			plugin.Selection{Name: "systemd-logs"},
 			plugin.Selection{Name: "e2e"},
 			plugin.Selection{Name: "heptio-e2e"},
 		},

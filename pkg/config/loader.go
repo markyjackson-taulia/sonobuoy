@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,24 +26,20 @@ import (
 	pluginloader "github.com/heptio/sonobuoy/pkg/plugin/loader"
 	"github.com/pkg/errors"
 	"github.com/spf13/viper"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 // LoadConfig will load the current sonobuoy configuration using the filesystem
 // and environment variables, and returns a config object
 func LoadConfig() (*Config, error) {
 	var err error
-	cfg := NewWithDefaults()
+	cfg := New()
 
 	// 0 - load defaults
 	viper.SetConfigType("json")
 	viper.SetConfigName("config")
 	viper.AddConfigPath("/etc/sonobuoy/")
 	viper.AddConfigPath(".")
-	viper.SetDefault("kubeconfig", "")
-	viper.BindEnv("kubeconfig")
+
 	// Allow specifying a custom config file via the SONOBUOY_CONFIG env var
 	if forceCfg := os.Getenv("SONOBUOY_CONFIG"); forceCfg != "" {
 		viper.SetConfigFile(forceCfg)
@@ -121,39 +117,19 @@ func (cfg *Config) Validate() (errors []error) {
 	return errors
 }
 
-// LoadClient creates a kube-clientset, using given sonobuoy configuration
-func LoadClient(cfg *Config) (kubernetes.Interface, error) {
-	var config *rest.Config
-	var err error
-
-	// 1 - gather config information used to initialize
-	kubeconfig := viper.GetString("kubeconfig")
-	if len(kubeconfig) > 0 {
-		cfg.Kubeconfig = kubeconfig
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-	} else {
-		config, err = rest.InClusterConfig()
-	}
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	// 2 - creates the clientset from kubeconfig
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, err
-	}
-
-	return clientset, nil
-}
-
 // loadAllPlugins takes the given sonobuoy configuration and gives back a
 // plugin.Interface for every plugin specified by the configuration.
 func loadAllPlugins(cfg *Config) error {
 	var plugins []plugin.Interface
 
 	// Load all Plugins
-	plugins, err := pluginloader.LoadAllPlugins(cfg.PluginNamespace, cfg.PluginSearchPath, cfg.PluginSelections, cfg.Aggregation.AdvertiseAddress)
+	plugins, err := pluginloader.LoadAllPlugins(
+		cfg.Namespace,
+		cfg.WorkerImage,
+		cfg.ImagePullPolicy,
+		cfg.PluginSearchPath,
+		cfg.PluginSelections,
+	)
 	if err != nil {
 		return err
 	}

@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,12 +19,12 @@ package worker
 import (
 	"io/ioutil"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
 	"testing"
 
+	"github.com/heptio/sonobuoy/pkg/backplane/ca/authtest"
 	"github.com/heptio/sonobuoy/pkg/plugin"
 	"github.com/heptio/sonobuoy/pkg/plugin/aggregation"
 )
@@ -41,7 +41,7 @@ func TestRun(t *testing.T) {
 		})
 	}
 
-	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *httptest.Server) {
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *authtest.Server) {
 		for _, h := range hosts {
 			URL, err := aggregation.NodeResultURL(srv.URL, h, "systemd_logs")
 			if err != nil {
@@ -51,7 +51,7 @@ func TestRun(t *testing.T) {
 			withTempDir(t, func(tmpdir string) {
 				ioutil.WriteFile(tmpdir+"/systemd_logs", []byte("{}"), 0755)
 				ioutil.WriteFile(tmpdir+"/done", []byte(tmpdir+"/systemd_logs"), 0755)
-				err := GatherResults(tmpdir+"/done", URL, srv.Client())
+				err := GatherResults(tmpdir+"/done", URL, srv.Client(), nil)
 				if err != nil {
 					t.Fatalf("Got error running agent: %v", err)
 				}
@@ -69,7 +69,7 @@ func TestRunGlobal(t *testing.T) {
 		plugin.ExpectedResult{ResultType: "systemd_logs"},
 	}
 
-	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *httptest.Server) {
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *authtest.Server) {
 		url, err := aggregation.GlobalResultURL(srv.URL, "systemd_logs")
 		if err != nil {
 			t.Fatalf("unexpected error getting global result url %v", err)
@@ -78,7 +78,7 @@ func TestRunGlobal(t *testing.T) {
 		withTempDir(t, func(tmpdir string) {
 			ioutil.WriteFile(tmpdir+"/systemd_logs.json", []byte("{}"), 0755)
 			ioutil.WriteFile(tmpdir+"/done", []byte(tmpdir+"/systemd_logs.json"), 0755)
-			err := GatherResults(tmpdir+"/done", url, srv.Client())
+			err := GatherResults(tmpdir+"/done", url, srv.Client(), nil)
 			if err != nil {
 				t.Fatalf("Got error running agent: %v", err)
 			}
@@ -95,7 +95,7 @@ func TestRunGlobal_noExtension(t *testing.T) {
 		plugin.ExpectedResult{ResultType: "systemd_logs"},
 	}
 
-	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *httptest.Server) {
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *authtest.Server) {
 		url, err := aggregation.GlobalResultURL(srv.URL, "systemd_logs")
 		if err != nil {
 			t.Fatalf("unexpected error getting global result url %v", err)
@@ -103,12 +103,35 @@ func TestRunGlobal_noExtension(t *testing.T) {
 		withTempDir(t, func(tmpdir string) {
 			ioutil.WriteFile(tmpdir+"/systemd_logs", []byte("{}"), 0755)
 			ioutil.WriteFile(tmpdir+"/done", []byte(tmpdir+"/systemd_logs"), 0755)
-			err := GatherResults(tmpdir+"/done", url, srv.Client())
+			err := GatherResults(tmpdir+"/done", url, srv.Client(), nil)
 			if err != nil {
 				t.Fatalf("Got error running agent: %v", err)
 			}
 
 			ensureExists(t, path.Join(aggr.OutputDir, "systemd_logs", "results"))
+		})
+	})
+}
+
+func TestRunGlobalCleanup(t *testing.T) {
+
+	// Create an expectedResults array
+	expectedResults := []plugin.ExpectedResult{
+		plugin.ExpectedResult{ResultType: "systemd_logs"},
+	}
+	stopc := make(chan struct{}, 1)
+	stopc <- struct{}{}
+	withAggregator(t, expectedResults, func(aggr *aggregation.Aggregator, srv *authtest.Server) {
+		url, err := aggregation.GlobalResultURL(srv.URL, "systemd_logs")
+		if err != nil {
+			t.Fatalf("unexpected error getting global result url %v", err)
+		}
+
+		withTempDir(t, func(tmpdir string) {
+			err := GatherResults(tmpdir+"/done", url, srv.Client(), stopc)
+			if err != nil {
+				t.Fatalf("Got error running agent: %v", err)
+			}
 		})
 	})
 }
@@ -133,7 +156,7 @@ func withTempDir(t *testing.T, callback func(tmpdir string)) {
 	callback(tmpdir)
 }
 
-func withAggregator(t *testing.T, expectedResults []plugin.ExpectedResult, callback func(*aggregation.Aggregator, *httptest.Server)) {
+func withAggregator(t *testing.T, expectedResults []plugin.ExpectedResult, callback func(*aggregation.Aggregator, *authtest.Server)) {
 	withTempDir(t, func(tmpdir string) {
 		// Reset the default transport to clear any connection pooling
 		http.DefaultTransport = &http.Transport{}
@@ -141,7 +164,7 @@ func withAggregator(t *testing.T, expectedResults []plugin.ExpectedResult, callb
 		// Configure the aggregator
 		aggr := aggregation.NewAggregator(tmpdir, expectedResults)
 		handler := aggregation.NewHandler(aggr.HandleHTTPResult)
-		srv := httptest.NewServer(handler)
+		srv := authtest.NewTLSServer(handler, t)
 		defer srv.Close()
 
 		callback(aggr, srv)

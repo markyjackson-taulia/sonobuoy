@@ -16,7 +16,8 @@ FROM gcr.io/heptio-images/golang:1.9-alpine3.6
 MAINTAINER Timothy St. Clair "tstclair@heptio.com"
 
 RUN apk add --no-cache ca-certificates
-ADD sonobuoy /sonobuoy 
+ADD sonobuoy /sonobuoy
 ADD scripts/run_master.sh /run_master.sh
+ADD scripts/run_single_node_worker.sh /run_single_node_worker.sh
 WORKDIR /
 CMD ["/bin/sh", "-c", "/run_master.sh"]

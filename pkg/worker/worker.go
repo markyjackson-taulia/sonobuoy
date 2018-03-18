@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -39,30 +39,30 @@ func init() {
 // 1. Output data will be placed into an agreed upon results directory.
 // 2. The Job will wait for a done file
 // 3. The done file contains a single string of the results to be sent to the master
-func GatherResults(waitfile string, url string, client *http.Client) error {
-	var inputFileName []byte
-	var err error
-	var outfile *os.File
-
-	// just loop looking for a file.
-	done := false
-	logrus.Infof("Waiting on: (%v)", waitfile)
-	for !done {
-		inputFileName, err = ioutil.ReadFile(waitfile) // For read access.
-		if err != nil {
-			// There is no need to log here, just wait for the results.
-			logrus.Infof("Sleeping")
-			time.Sleep(1 * time.Second)
-		} else {
-			done = true
+func GatherResults(waitfile string, url string, client *http.Client, stopc <-chan struct{}) error {
+	logrus.WithField("waitfile", waitfile).Info("Waiting for waitfile")
+	ticker := time.Tick(1 * time.Second)
+	// TODO(chuckha) evaluate wait.Until [https://github.com/kubernetes/apimachinery/blob/e9ff529c66f83aeac6dff90f11ea0c5b7c4d626a/pkg/util/wait/wait.go]
+	for {
+		select {
+		case <-ticker:
+			if resultFile, err := ioutil.ReadFile(waitfile); err == nil {
+				logrus.WithField("resultFile", string(resultFile)).Info("Detected done file, transmitting result file")
+				return handleWaitFile(string(resultFile), url, client)
+			}
+		case <-stopc:
+			logrus.Info("Did not receive plugin results in time. Shutting down worker.")
+			return nil
 		}
 	}
+}
 
-	s := string(inputFileName)
-	logrus.Infof("Detected done file, transmitting: (%v)", s)
+func handleWaitFile(resultFile, url string, client *http.Client) error {
+	var outfile *os.File
+	var err error
 
 	// Set content type
-	extension := filepath.Ext(s)
+	extension := filepath.Ext(resultFile)
 	mimeType := mime.TypeByExtension(extension)
 
 	defer func() {
@@ -73,8 +73,7 @@ func GatherResults(waitfile string, url string, client *http.Client) error {
 
 	// transmit back the results file.
 	return DoRequest(url, client, func() (io.Reader, string, error) {
-		outfile, err = os.Open(s)
+		outfile, err = os.Open(resultFile)
 		return outfile, mimeType, errors.WithStack(err)
 	})
-
 }

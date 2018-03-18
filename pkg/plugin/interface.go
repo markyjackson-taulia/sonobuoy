@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,10 +17,11 @@ limitations under the License.
 package plugin
 
 import (
+	"crypto/tls"
 	"io"
 	"path"
-	"text/template"
 
+	"github.com/heptio/sonobuoy/pkg/plugin/manifest"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -30,7 +31,7 @@ import (
 type Interface interface {
 	// Run runs a plugin, declaring all resources it needs, and then
 	// returns.  It does not block and wait until the plugin has finished.
-	Run(kubeClient kubernetes.Interface) error
+	Run(kubeClient kubernetes.Interface, hostname string, cert *tls.Certificate) error
 	// Cleanup cleans up all resources created by the plugin
 	Cleanup(kubeClient kubernetes.Interface)
 	// Monitor continually checks for problems in the resources created by a
@@ -41,6 +42,8 @@ type Interface interface {
 	// ExpectedResults is an array of Result objects that a plugin should
 	// expect to submit.
 	ExpectedResults(nodes []v1.Node) []ExpectedResult
+	// FillTemplate fills the driver's internal template so it can be presented to users
+	FillTemplate(hostname string, cert *tls.Certificate) ([]byte, error)
 	// GetResultType returns the type of results for this plugin, typically
 	// the same as the plugin name.
 	GetResultType() string
@@ -48,20 +51,12 @@ type Interface interface {
 	GetName() string
 }
 
-// A required piece of data to render the template found in Definition.
-type DefinitionTemplateData struct {
-	SessionID     string
-	MasterAddress string
-	Namespace     string
-}
-
 // Definition defines a plugin's features, method of launch, and other
 // metadata about it.
 type Definition struct {
-	Driver     string
 	Name       string
 	ResultType string
-	Template   *template.Template
+	Spec       manifest.Container
 }
 
 // ExpectedResult is an expected result that a plugin will submit.  This is so
@@ -101,8 +96,7 @@ func (r *Result) Path() string {
 
 // Selection is the user specified input to load and initialize plugins
 type Selection struct {
-	Name   string                 `json:"name"`
-	Config map[string]interface{} `json:"config,omitempty"`
+	Name string `json:"name"`
 }
 
 // AggregationConfig are the config settings for the server that aggregates plugin results
@@ -124,6 +118,9 @@ type WorkerConfig struct {
 	// ResultType is the type of result (to be put in the HTTP URL's path) to be
 	// sent back to sonobuoy.
 	ResultType string `json:"resulttype,omitempty" mapstructure:"resulttype"`
+	CACert     string `json:"cacert,omitempty" mapstructure:"cacert"`
+	ClientCert string `json:"clientcert,omitempty" mapstructure:"clientcert"`
+	ClientKey  string `json:"clientkey,omitempty" mapstructure:"clientkey"`
 }
 
 // ID returns a unique identifier for this expected result to distinguish it

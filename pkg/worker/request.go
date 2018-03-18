@@ -1,5 +1,5 @@
 /*
-Copyright 2017 Heptio Inc.
+Copyright 2018 Heptio Inc.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -70,7 +70,7 @@ func DoRequest(url string, client *http.Client, callback func() (io.Reader, stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.Wrapf(err, "error dialing master at %v", url)
+		return errors.Wrapf(err, "error encountered dialing master at %v", url)
 	}
 	if resp.StatusCode != http.StatusOK {
 		// TODO: retry logic for something like a 429 or otherwise
